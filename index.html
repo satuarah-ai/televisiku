@@ -69,6 +69,7 @@
   #err { position: absolute; inset: 0; display: none; place-items: center; text-align: center;
     padding: 24px; font-size: 18px; color: #ffb3ad; pointer-events: none; }
   #err.show { display: grid; }
+  #skipMsg { margin-top: 18px; color: #fff; font-size: 20px; font-weight: 700; }
   .empty { grid-column: 1/-1; color: var(--muted); text-align: center; padding: 60px 0; }
   @media (max-width: 600px) {
     header, main, #status { padding-left: 16px; padding-right: 16px; }
@@ -127,6 +128,7 @@ const $ = id => document.getElementById(id);
 const cache = {};
 let current = "id", visible = [], playingIndex = -1, hls = null, osdTimer = null;
 let listOpen = false, listSel = 0, numBuf = "", numTimer = null;
+let zapDir = 1, skipTimer = null, skipCount = 0;
 const cleanName = ch => ch.name.replace(/\s*\[.*?\]/g, "");
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -225,8 +227,11 @@ function render() {
 }
 
 // ---------- Pemutar ----------
-function play(i) {
+function zap(d) { zapDir = d; play(playingIndex + d); }
+function cancelSkip() { clearInterval(skipTimer); skipTimer = null; }
+function play(i, auto = false) {
   if (!visible.length) return;
+  cancelSkip(); if (!auto) skipCount = 0;
   playingIndex = (i + visible.length) % visible.length;
   const ch = visible[playingIndex], video = $("video");
   $("player").classList.add("show"); $("err").classList.remove("show");
@@ -243,20 +248,35 @@ function play(i) {
     });
     hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) showErr(ch); });
     hls.loadSource(ch.url); hls.attachMedia(video);
+    video.onerror = null;
   } else {
+    video.onerror = () => showErr(ch);
     video.src = ch.url;
   }
-  video.onerror = () => showErr(ch);
   video.play().catch(() => {});
   video.focus();
 }
 function showErr(ch) {
+  if (ch !== visible[playingIndex] || $("err").classList.contains("show")) return;
   const httpOnHttps = location.protocol === "https:" && ch.url.startsWith("http:");
   $("err").innerHTML = `<div>⚠ Channel ini tidak bisa diputar di browser.<br><small>${
     httpOnHttps ? "Alamatnya memakai http (tidak aman) sehingga diblokir browser."
                 : "Mungkin sedang offline, diblokir wilayah, atau melarang pemutaran dari situs lain."
-  }<br>Biasanya tetap bisa diputar di aplikasi IPTV (TiviMate/OTT Navigator).<br>▲▼ pindah channel · OK buka daftar channel.</small></div>`;
+  }<br>Biasanya tetap bisa diputar di aplikasi IPTV (TiviMate/OTT Navigator).<br>▲▼ pindah channel · OK buka daftar channel.</small><div id="skipMsg"></div></div>`;
   $("err").classList.add("show");
+  // Lompat otomatis ke channel berikutnya (searah tombol terakhir), maksimal 10 kali berturut-turut.
+  if (visible.length < 2) return;
+  if (skipCount >= 10) {
+    $("skipMsg").textContent = "Sudah 10 channel berturut-turut gagal. Pilih channel lain lewat daftar (OK).";
+    return;
+  }
+  let left = 3;
+  const tick = () => { $("skipMsg").textContent = `Pindah ke channel ${zapDir > 0 ? "berikutnya" : "sebelumnya"} dalam ${left} detik…`; };
+  tick();
+  skipTimer = setInterval(() => {
+    if (--left > 0) return tick();
+    skipCount++; play(playingIndex + zapDir, true);
+  }, 1000);
 }
 function showOSD() {
   const ch = visible[playingIndex]; if (!ch) return;
@@ -269,7 +289,7 @@ function showOSD() {
 
 // ---------- Daftar channel di dalam pemutar ----------
 function openList() {
-  listOpen = true; listSel = playingIndex;
+  cancelSkip(); listOpen = true; listSel = playingIndex;
   $("list").innerHTML = `<div class="hd">▲▼ pilih · OK putar · ▶ ★ simpan · ◀/Kembali tutup</div>` +
     visible.map((ch, i) =>
       `<div class="it${i === playingIndex ? " on" : ""}${i === listSel ? " sel" : ""}" data-i="${i}">` +
@@ -297,6 +317,7 @@ $("list").onclick = e => {
 
 // ---------- Lompat ke nomor channel (tombol angka di remote) ----------
 function typeDigit(d) {
+  cancelSkip();
   numBuf = (numBuf + d).slice(-4);
   $("numIn").textContent = numBuf; $("numIn").classList.add("show");
   clearTimeout(numTimer); numTimer = setTimeout(commitNum, 1500);
@@ -310,15 +331,15 @@ function commitNum() {
 
 // ---------- Tombol di layar (untuk mouse/sentuh) ----------
 const onBtn = fn => () => { fn(); $("video").focus(); };
-$("bPrev").onclick = onBtn(() => play(playingIndex - 1));
-$("bNext").onclick = onBtn(() => play(playingIndex + 1));
+$("bPrev").onclick = onBtn(() => zap(-1));
+$("bNext").onclick = onBtn(() => zap(1));
 $("bList").onclick = onBtn(() => listOpen ? closeList() : openList());
 $("bFav").onclick = onBtn(() => { toggleMine(visible[playingIndex]); showOSD(); });
 $("bClose").onclick = () => closePlayer();
 $("player").onmousemove = () => showOSD();
 
 function closePlayer() {
-  closeList(); numBuf = ""; clearTimeout(numTimer); $("numIn").classList.remove("show");
+  cancelSkip(); closeList(); numBuf = ""; clearTimeout(numTimer); $("numIn").classList.remove("show");
   if (hls) { hls.destroy(); hls = null; }
   const v = $("video"); v.pause(); v.removeAttribute("src"); v.load();
   $("player").classList.remove("show");
@@ -374,8 +395,8 @@ document.addEventListener("keydown", e => {
       else return;
       e.preventDefault(); return;
     }
-    if (k === "ArrowUp" || k === "ChannelUp") play(playingIndex - 1);
-    else if (k === "ArrowDown" || k === "ChannelDown") play(playingIndex + 1);
+    if (k === "ArrowUp" || k === "ChannelUp") zap(-1);
+    else if (k === "ArrowDown" || k === "ChannelDown") zap(1);
     else if (k === "Enter" || k === "ArrowLeft") openList();
     else if (fav) { toggleMine(visible[playingIndex]); showOSD(); }
     else if (back) closePlayer();
