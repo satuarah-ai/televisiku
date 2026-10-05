@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Ku</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --card: #1c2330; --text: #e6edf3;
+    --muted: #8b949e; --accent: #2f81f7; --star: #f2c94c; --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg);
+    padding: 16px 24px 8px; border-bottom: 1px solid #ffffff14; }
+  h1 { margin: 0 0 12px; font-size: 26px; }
+  h1 span { color: var(--accent); }
+  .tabs, .tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  button, input { font: inherit; color: var(--text); background: var(--panel);
+    border: 2px solid transparent; border-radius: 10px; padding: 9px 16px; }
+  button { cursor: pointer; }
+  button.active { background: var(--accent); }
+  input[type=search] { flex: 1; min-width: 180px; }
+  :focus { outline: none; border-color: #fff !important; box-shadow: 0 0 0 4px #2f81f766; }
+  label.chk { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px; }
+  #status { color: var(--muted); font-size: 14px; padding: 8px 24px; }
+  main { padding: 8px 24px 40px; display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  .ch { position: relative; background: var(--card); border-radius: 14px; padding: 14px 10px 12px;
+    text-align: center; border: 3px solid transparent; transition: transform .12s; }
+  .ch:focus { transform: scale(1.06); border-color: var(--accent) !important; }
+  .ch img { width: 100%; height: 80px; object-fit: contain; display: block; margin-bottom: 10px; }
+  .ch .logo-fallback { height: 80px; display: grid; place-items: center; font-size: 34px;
+    font-weight: 700; color: var(--accent); margin-bottom: 10px; }
+  .ch .name { font-size: 15px; line-height: 1.25; word-break: break-word; }
+  .ch .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .ch .star { position: absolute; top: 6px; right: 8px; color: var(--star); font-size: 18px; }
+  #player { position: fixed; inset: 0; background: #000; z-index: 20; display: none; }
+  #player.show { display: block; }
+  #player video { width: 100%; height: 100%; background: #000; }
+  #osd { position: absolute; left: 0; right: 0; top: 0; padding: 20px 28px;
+    background: linear-gradient(#000c, transparent); transition: opacity .4s; }
+  #osd { z-index: 1; }
+  #osd.hide { opacity: 0; pointer-events: none; }
+  #osd .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  #osd .num { color: var(--accent); font-size: 16px; font-weight: 700; }
+  #osd .t { font-size: 28px; font-weight: 700; }
+  #osd .h { color: #ccc; font-size: 14px; margin-top: 6px; }
+  #osd .btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  #osd .btns button { background: #000a; }
+  #list { position: absolute; top: 0; bottom: 0; left: 0; width: min(380px, 85vw); z-index: 2;
+    background: #0d1117f2; overflow-y: auto; padding: 12px 0; transform: translateX(-100%);
+    transition: transform .2s; }
+  #list.show { transform: none; }
+  #list .hd { padding: 8px 16px 12px; color: var(--muted); font-size: 13px; }
+  #list .it { display: flex; align-items: center; gap: 10px; padding: 8px 16px; cursor: pointer;
+    border-left: 4px solid transparent; }
+  #list .it.sel { background: #2f81f733; border-left-color: var(--accent); }
+  #list .it.on .nm { color: var(--accent); font-weight: 700; }
+  #list .no { width: 40px; flex: none; text-align: right; color: var(--muted); font-size: 13px; }
+  #list img, #list .noimg { width: 44px; height: 28px; flex: none; object-fit: contain; }
+  #list .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #list .st { color: var(--star); }
+  #numIn { position: absolute; top: 110px; right: 28px; z-index: 3; display: none;
+    font-size: 64px; font-weight: 800; text-shadow: 0 2px 10px #000; }
+  #numIn.show { display: block; }
+  #err { position: absolute; inset: 0; display: none; place-items: center; text-align: center;
+    padding: 24px; font-size: 18px; color: #ffb3ad; pointer-events: none; }
+  #err.show { display: grid; }
+  .empty { grid-column: 1/-1; color: var(--muted); text-align: center; padding: 60px 0; }
+  @media (max-width: 600px) {
+    header, main, #status { padding-left: 16px; padding-right: 16px; }
+    main { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>📺 TV <span>Ku</span></h1>
+  <nav class="tabs" id="tabs"></nav>
+  <div class="tools">
+    <input type="search" id="q" placeholder="Cari channel…">
+    <label class="chk"><input type="checkbox" id="hideGeo" checked> Sembunyikan yang terblokir wilayah</label>
+    <button id="btnExport" title="Unduh Daftarku sebagai playlist M3U">⬇ Ekspor M3U</button>
+    <button id="btnImport" title="Masukkan file M3U ke Daftarku">⬆ Impor M3U</button>
+    <input type="file" id="fileImport" accept=".m3u,.m3u8" hidden>
+  </div>
+</header>
+<div id="status"></div>
+<main id="grid"></main>
+
+<div id="player">
+  <video id="video" autoplay playsinline controls></video>
+  <div id="osd"><div class="row">
+    <div><div class="num" id="osdNum"></div><div class="t" id="osdTitle"></div>
+      <div class="h">▲▼ ganti channel · OK = daftar channel · ketik angka = lompat ke nomor · Menu = ★ simpan · Kembali = tutup</div></div>
+    <div class="btns">
+      <button id="bPrev" title="Channel sebelumnya">▲</button>
+      <button id="bNext" title="Channel berikutnya">▼</button>
+      <button id="bList">☰ Daftar</button>
+      <button id="bFav"></button>
+      <button id="bClose" title="Tutup">✕</button>
+    </div></div></div>
+  <aside id="list"></aside>
+  <div id="numIn"></div>
+  <div id="err"></div>
+</div>
+
+<script>
+// Sumber: iptv-org, kumpulan siaran publik yang memang dibuka gratis oleh pemiliknya.
+const BASE = "https://iptv-org.github.io/iptv/";
+const SOURCES = [
+  { id: "mine",  label: "★ Daftarku" },
+  { id: "id",    label: "🇮🇩 Indonesia",  url: BASE + "countries/id.m3u" },
+  { id: "kids",  label: "🧸 Anak",        url: BASE + "categories/kids.m3u" },
+  { id: "anim",  label: "🎨 Animasi",     url: BASE + "categories/animation.m3u" },
+  { id: "sport", label: "⚽ Olahraga",    url: BASE + "categories/sports.m3u" },
+  { id: "news",  label: "📰 Berita",      url: BASE + "categories/news.m3u" },
+  { id: "music", label: "🎵 Musik",       url: BASE + "categories/music.m3u" },
+  { id: "movie", label: "🎬 Film",        url: BASE + "categories/movies.m3u" },
+  { id: "edu",   label: "📚 Edukasi",     url: BASE + "categories/education.m3u" },
+];
+
+const $ = id => document.getElementById(id);
+const cache = {};
+let current = "id", visible = [], playingIndex = -1, hls = null, osdTimer = null;
+let listOpen = false, listSel = 0, numBuf = "", numTimer = null;
+const cleanName = ch => ch.name.replace(/\s*\[.*?\]/g, "");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- Penyimpanan Daftarku ----------
+function loadMine() { try { return JSON.parse(localStorage.getItem("tvku-mine")) || []; } catch { return []; } }
+function saveMine(list) { try { localStorage.setItem("tvku-mine", JSON.stringify(list)); } catch {} }
+let mine = loadMine();
+const isMine = ch => mine.some(m => m.url === ch.url);
+function toggleMine(ch) {
+  mine = isMine(ch) ? mine.filter(m => m.url !== ch.url) : [...mine, ch];
+  saveMine(mine);
+}
+
+// ---------- Parser M3U ----------
+function parseM3U(text) {
+  const out = []; let info = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("#EXTINF")) {
+      const attr = k => (line.match(new RegExp(k + '="([^"]*)"')) || [])[1] || "";
+      const name = line.slice(line.lastIndexOf(",") + 1).trim();
+      info = { name, logo: attr("tvg-logo"), group: attr("group-title"), id: attr("tvg-id"),
+               referrer: attr("http-referrer") };
+    } else if (line && !line.startsWith("#") && info) {
+      info.url = line; out.push(info); info = null;
+    }
+  }
+  return out;
+}
+function toM3U(list) {
+  return "#EXTM3U\n" + list.map(c =>
+    `#EXTINF:-1 tvg-id="${c.id || ""}" tvg-logo="${c.logo || ""}" group-title="${c.group || "Daftarku"}"` +
+    (c.referrer ? ` http-referrer="${c.referrer}"` : "") + `,${c.name}\n` +
+    (c.referrer ? `#EXTVLCOPT:http-referrer=${c.referrer}\n` : "") + c.url).join("\n") + "\n";
+}
+
+// ---------- Tampilan ----------
+function renderTabs() {
+  $("tabs").innerHTML = "";
+  for (const s of SOURCES) {
+    const b = document.createElement("button");
+    b.textContent = s.label; b.className = s.id === current ? "active" : "";
+    b.onclick = () => { current = s.id; renderTabs(); load(); };
+    $("tabs").appendChild(b);
+  }
+}
+
+async function load() {
+  const src = SOURCES.find(s => s.id === current);
+  if (src.url && !cache[src.id]) {
+    $("status").textContent = "Memuat daftar channel…"; $("grid").innerHTML = "";
+    try {
+      const res = await fetch(src.url);
+      cache[src.id] = parseM3U(await res.text());
+    } catch (e) {
+      $("status").textContent = "Gagal memuat daftar. Periksa koneksi internet."; return;
+    }
+  }
+  render();
+}
+
+function render() {
+  const q = $("q").value.toLowerCase().trim();
+  const hideGeo = $("hideGeo").checked;
+  const all = current === "mine" ? mine : (cache[current] || []);
+  visible = all.filter(c =>
+    (!q || c.name.toLowerCase().includes(q) || (c.group || "").toLowerCase().includes(q)) &&
+    (!hideGeo || !/geo-blocked/i.test(c.name)));
+  $("status").textContent = `${visible.length} channel` +
+    (current === "mine" ? "" : " · klik kanan (atau tombol Menu di remote) untuk ★ menyimpan ke Daftarku");
+  const grid = $("grid"); grid.innerHTML = "";
+  if (!visible.length) {
+    grid.innerHTML = `<div class="empty">${current === "mine"
+      ? "Daftarku masih kosong. Buka tab lain lalu simpan channel favoritmu."
+      : "Tidak ada channel yang cocok."}</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  visible.forEach((ch, i) => {
+    const el = document.createElement("button");
+    el.className = "ch";
+    const cleanName = ch.name.replace(/\s*\[.*?\]/g, "");
+    const quality = (ch.name.match(/\((\d+[pi])\)/) || [])[1] || "";
+    el.innerHTML =
+      (isMine(ch) ? '<span class="star">★</span>' : "") +
+      (ch.logo ? `<img loading="lazy" alt="" src="${ch.logo}" onerror="this.outerHTML='<div class=logo-fallback>${cleanName[0] || "?"}</div>'">`
+               : `<div class="logo-fallback">${cleanName[0] || "?"}</div>`) +
+      `<div class="name"></div><div class="meta"></div>`;
+    el.querySelector(".name").textContent = cleanName.replace(/\s*\(\d+[pi]\)/, "");
+    el.querySelector(".meta").textContent = [quality, (ch.group || "").split(";")[0]].filter(Boolean).join(" · ");
+    el.onclick = () => play(i);
+    el.oncontextmenu = e => { e.preventDefault(); toggleMine(ch); render(); };
+    frag.appendChild(el);
+  });
+  grid.appendChild(frag);
+}
+
+// ---------- Pemutar ----------
+function play(i) {
+  if (!visible.length) return;
+  playingIndex = (i + visible.length) % visible.length;
+  const ch = visible[playingIndex], video = $("video");
+  $("player").classList.add("show"); $("err").classList.remove("show");
+  showOSD(ch);
+  if (hls) { hls.destroy(); hls = null; }
+  if (window.Hls && Hls.isSupported()) {
+    // Jernih: anggap internet kencang dan mulai dari kualitas tertinggi; kalau tersendat, hls.js turun sendiri.
+    hls = new Hls({ lowLatencyMode: false, maxBufferLength: 30, capLevelToPlayerSize: false,
+                    abrEwmaDefaultEstimate: 8e6 });
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { if (hls.levels.length > 1) hls.startLevel = hls.levels.length - 1; });
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
+      const h = hls.levels[d.level]?.height;
+      $("osdNum").textContent = `${playingIndex + 1} / ${visible.length}` + (h ? ` · ${h}p` : "");
+    });
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) showErr(ch); });
+    hls.loadSource(ch.url); hls.attachMedia(video);
+  } else {
+    video.src = ch.url;
+  }
+  video.onerror = () => showErr(ch);
+  video.play().catch(() => {});
+  video.focus();
+}
+function showErr(ch) {
+  const httpOnHttps = location.protocol === "https:" && ch.url.startsWith("http:");
+  $("err").innerHTML = `<div>⚠ Channel ini tidak bisa diputar di browser.<br><small>${
+    httpOnHttps ? "Alamatnya memakai http (tidak aman) sehingga diblokir browser."
+                : "Mungkin sedang offline, diblokir wilayah, atau melarang pemutaran dari situs lain."
+  }<br>Biasanya tetap bisa diputar di aplikasi IPTV (TiviMate/OTT Navigator).<br>▲▼ pindah channel · OK buka daftar channel.</small></div>`;
+  $("err").classList.add("show");
+}
+function showOSD() {
+  const ch = visible[playingIndex]; if (!ch) return;
+  $("osdNum").textContent = `${playingIndex + 1} / ${visible.length}`;
+  $("osdTitle").textContent = (isMine(ch) ? "★ " : "") + cleanName(ch);
+  $("bFav").textContent = isMine(ch) ? "★ Tersimpan" : "☆ Simpan";
+  $("osd").classList.remove("hide");
+  clearTimeout(osdTimer); osdTimer = setTimeout(() => $("osd").classList.add("hide"), 4000);
+}
+
+// ---------- Daftar channel di dalam pemutar ----------
+function openList() {
+  listOpen = true; listSel = playingIndex;
+  $("list").innerHTML = `<div class="hd">▲▼ pilih · OK putar · ▶ ★ simpan · ◀/Kembali tutup</div>` +
+    visible.map((ch, i) =>
+      `<div class="it${i === playingIndex ? " on" : ""}${i === listSel ? " sel" : ""}" data-i="${i}">` +
+      `<span class="no">${i + 1}</span>` +
+      (ch.logo ? `<img loading="lazy" alt="" src="${esc(ch.logo)}" onerror="this.style.visibility='hidden'">`
+               : `<span class="noimg"></span>`) +
+      `<span class="nm">${esc(cleanName(ch))}</span><span class="st">${isMine(ch) ? "★" : ""}</span></div>`
+    ).join("");
+  $("list").classList.add("show");
+  listItems()[listSel]?.scrollIntoView({ block: "center" });
+}
+const listItems = () => $("list").querySelectorAll(".it");
+function moveSel(d) {
+  const items = listItems();
+  items[listSel]?.classList.remove("sel");
+  listSel = (listSel + d + visible.length) % visible.length;
+  items[listSel].classList.add("sel");
+  items[listSel].scrollIntoView({ block: "nearest" });
+}
+function closeList() { listOpen = false; $("list").classList.remove("show"); }
+$("list").onclick = e => {
+  const it = e.target.closest(".it");
+  if (it) { closeList(); play(+it.dataset.i); }
+};
+
+// ---------- Lompat ke nomor channel (tombol angka di remote) ----------
+function typeDigit(d) {
+  numBuf = (numBuf + d).slice(-4);
+  $("numIn").textContent = numBuf; $("numIn").classList.add("show");
+  clearTimeout(numTimer); numTimer = setTimeout(commitNum, 1500);
+}
+function commitNum() {
+  clearTimeout(numTimer);
+  const n = parseInt(numBuf, 10); numBuf = "";
+  $("numIn").classList.remove("show");
+  if (n >= 1 && n <= visible.length) { closeList(); play(n - 1); }
+}
+
+// ---------- Tombol di layar (untuk mouse/sentuh) ----------
+const onBtn = fn => () => { fn(); $("video").focus(); };
+$("bPrev").onclick = onBtn(() => play(playingIndex - 1));
+$("bNext").onclick = onBtn(() => play(playingIndex + 1));
+$("bList").onclick = onBtn(() => listOpen ? closeList() : openList());
+$("bFav").onclick = onBtn(() => { toggleMine(visible[playingIndex]); showOSD(); });
+$("bClose").onclick = () => closePlayer();
+$("player").onmousemove = () => showOSD();
+
+function closePlayer() {
+  closeList(); numBuf = ""; clearTimeout(numTimer); $("numIn").classList.remove("show");
+  if (hls) { hls.destroy(); hls = null; }
+  const v = $("video"); v.pause(); v.removeAttribute("src"); v.load();
+  $("player").classList.remove("show");
+  render();
+  const cards = document.querySelectorAll(".ch");
+  (cards[playingIndex] || cards[0])?.focus();
+}
+
+// ---------- Navigasi pakai remote (tombol panah) ----------
+function focusables() {
+  return [...document.querySelectorAll("header button, header input, .ch")]
+    .filter(el => el.offsetParent !== null && el.type !== "file");
+}
+function moveFocus(dir) {
+  const cur = document.activeElement;
+  const list = focusables();
+  if (!list.includes(cur)) { list[0]?.focus(); return; }
+  const a = cur.getBoundingClientRect(), ax = a.left + a.width / 2, ay = a.top + a.height / 2;
+  let best = null, bestScore = Infinity;
+  for (const el of list) {
+    if (el === cur) continue;
+    const b = el.getBoundingClientRect(), bx = b.left + b.width / 2, by = b.top + b.height / 2;
+    const dx = bx - ax, dy = by - ay;
+    const ok = dir === "ArrowRight" ? dx > 5 : dir === "ArrowLeft" ? dx < -5
+             : dir === "ArrowDown" ? dy > 5 : dy < -5;
+    if (!ok) continue;
+    const horiz = dir === "ArrowLeft" || dir === "ArrowRight";
+    const score = horiz ? Math.abs(dx) + Math.abs(dy) * 3 : Math.abs(dy) + Math.abs(dx) * 3;
+    if (score < bestScore) { bestScore = score; best = el; }
+  }
+  if (best) { best.focus(); best.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+}
+
+document.addEventListener("keydown", e => {
+  const inPlayer = $("player").classList.contains("show");
+  if (inPlayer) {
+    const k = e.key;
+    const back = k === "Escape" || k === "Backspace" || k === "GoBack" || e.keyCode === 4;
+    const fav = k === "ContextMenu" || k === "s";
+    if (/^[0-9]$/.test(k)) { e.preventDefault(); typeDigit(k); return; }
+    if (numBuf && k === "Enter") { e.preventDefault(); commitNum(); return; }
+    if (listOpen) {
+      if (k === "ArrowUp") moveSel(-1);
+      else if (k === "ArrowDown") moveSel(1);
+      else if (k === "PageUp" || k === "ChannelUp") moveSel(-10);
+      else if (k === "PageDown" || k === "ChannelDown") moveSel(10);
+      else if (k === "Enter") { closeList(); play(listSel); }
+      else if (k === "ArrowRight" || fav) {
+        toggleMine(visible[listSel]);
+        listItems()[listSel].querySelector(".st").textContent = isMine(visible[listSel]) ? "★" : "";
+      }
+      else if (k === "ArrowLeft" || back) closeList();
+      else return;
+      e.preventDefault(); return;
+    }
+    if (k === "ArrowUp" || k === "ChannelUp") play(playingIndex - 1);
+    else if (k === "ArrowDown" || k === "ChannelDown") play(playingIndex + 1);
+    else if (k === "Enter" || k === "ArrowLeft") openList();
+    else if (fav) { toggleMine(visible[playingIndex]); showOSD(); }
+    else if (back) closePlayer();
+    else if (k === "ArrowRight") showOSD();
+    else return;
+    e.preventDefault(); return;
+  }
+  if (e.key.startsWith("Arrow")) {
+    const t = document.activeElement;
+    if (t.tagName === "INPUT" && t.type === "search" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+    e.preventDefault(); moveFocus(e.key);
+  }
+  // Tombol menu / bintang di remote: simpan channel yang sedang dipilih
+  if ((e.key === "ContextMenu" || e.key === "s") && document.activeElement.classList.contains("ch")) {
+    const idx = [...document.querySelectorAll(".ch")].indexOf(document.activeElement);
+    toggleMine(visible[idx]); render(); document.querySelectorAll(".ch")[idx]?.focus();
+  }
+});
+
+// ---------- Ekspor / impor ----------
+$("btnExport").onclick = () => {
+  if (!mine.length) { alert("Daftarku masih kosong."); return; }
+  const blob = new Blob([toM3U(mine)], { type: "audio/x-mpegurl" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "tvku.m3u"; a.click();
+  URL.revokeObjectURL(a.href);
+};
+$("btnImport").onclick = () => $("fileImport").click();
+$("fileImport").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const added = parseM3U(await f.text()).filter(c => !isMine(c));
+  mine = [...mine, ...added]; saveMine(mine);
+  alert(`${added.length} channel ditambahkan ke Daftarku.`);
+  current = "mine"; renderTabs(); render(); e.target.value = "";
+};
+$("q").oninput = render;
+$("hideGeo").onchange = render;
+
+renderTabs(); load().then(() => document.querySelector(".ch")?.focus());
+</script>
+</body>
+</html>
