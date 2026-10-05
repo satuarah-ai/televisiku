@@ -83,7 +83,7 @@
   <nav class="tabs" id="tabs"></nav>
   <div class="tools">
     <input type="search" id="q" placeholder="Cari channel…">
-    <label class="chk"><input type="checkbox" id="hideGeo" checked> Sembunyikan yang terblokir wilayah</label>
+    <label class="chk"><input type="checkbox" id="okOnly" checked> Hanya yang bisa diputar</label>
     <button id="btnExport" title="Unduh Daftarku sebagai playlist M3U">⬇ Ekspor M3U</button>
     <button id="btnImport" title="Masukkan file M3U ke Daftarku">⬆ Impor M3U</button>
     <input type="file" id="fileImport" accept=".m3u,.m3u8" hidden>
@@ -142,6 +142,72 @@ function toggleMine(ch) {
   saveMine(mine);
 }
 
+// ---------- Pemeriksa channel: hanya tampilkan yang benar-benar bisa diputar ----------
+// Diperiksa dari perangkat penonton sendiri, jadi blokir wilayah & izin browser ikut terhitung.
+// Hasil disimpan sebentar supaya pembukaan berikutnya langsung cepat.
+const OK_TTL = 6 * 3600e3, BAD_TTL = 3 * 3600e3;
+let health = (() => { try { return JSON.parse(localStorage.getItem("tvku-health")) || {}; } catch { return {}; } })();
+let healthDirty = false;
+function saveHealth() {
+  if (!healthDirty) return; healthDirty = false;
+  try { localStorage.setItem("tvku-health", JSON.stringify(health)); } catch {}
+}
+setInterval(saveHealth, 3000);
+function known(ch) {
+  const h = health[ch.url];
+  return h && Date.now() - h.t < (h.ok ? OK_TTL : BAD_TTL) ? h.ok : null;
+}
+function mark(ch, ok) { health[ch.url] = { ok, t: Date.now() }; healthDirty = true; }
+
+async function fetchText(url, ms) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    return r.ok ? { text: (await r.text()).trimStart(), url: r.url } : null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+async function reachable(url, ms) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  try { const r = await fetch(url, { signal: ctl.signal }); ctl.abort(); return r.ok; }
+  catch { return false; } finally { clearTimeout(timer); }
+}
+const firstUri = text => text.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith("#"));
+// Lolos kalau playlist, sub-playlist, dan potongan video pertama semuanya bisa diambil browser ini.
+async function probe(ch) {
+  if (/geo-blocked/i.test(ch.name)) return false;
+  if (location.protocol === "https:" && ch.url.startsWith("http:")) return false;
+  let pl = await fetchText(ch.url, 8000);
+  if (!pl || !pl.text.startsWith("#EXTM3U")) return false;
+  if (pl.text.includes("#EXT-X-STREAM-INF")) {
+    const v = firstUri(pl.text); if (!v) return false;
+    pl = await fetchText(new URL(v, pl.url).href, 8000);
+    if (!pl || !pl.text.startsWith("#EXTM3U")) return false;
+  }
+  const seg = firstUri(pl.text);
+  return !!seg && reachable(new URL(seg, pl.url).href, 8000);
+}
+
+let checkRun = 0, checking = false, lastRefresh = 0;
+async function checkList(list) {
+  const run = ++checkRun, todo = list.filter(ch => known(ch) === null);
+  let i = 0;
+  checking = todo.length > 0; refresh();
+  const worker = async () => {
+    while (run === checkRun && i < todo.length) {
+      const ch = todo[i++];
+      mark(ch, await probe(ch));
+      if (Date.now() - lastRefresh > 1500) refresh();
+    }
+  };
+  await Promise.all(Array.from({ length: 10 }, worker));
+  if (run === checkRun) { checking = false; saveHealth(); refresh(); }
+}
+// Daftar tidak diubah selama menonton, supaya nomor channel di pemutar tetap sama.
+function refresh() {
+  lastRefresh = Date.now();
+  if (!$("player").classList.contains("show")) render();
+}
+
 // ---------- Parser M3U ----------
 function parseM3U(text) {
   const out = []; let info = null;
@@ -184,32 +250,46 @@ async function load() {
       const res = await fetch(src.url);
       cache[src.id] = parseM3U(await res.text());
     } catch (e) {
-      $("status").textContent = "Gagal memuat daftar. Periksa koneksi internet."; return;
+      if (current === src.id) $("status").textContent = "Gagal memuat daftar. Periksa koneksi internet.";
+      return;
     }
   }
-  render();
+  if (current !== src.id) return;  // sudah pindah tab selagi daftar ini dimuat
+  lastSig = null; render();
+  checkList(src.id === "mine" ? mine : cache[src.id]);
 }
+let lastSig = null;
 
 function render() {
   const q = $("q").value.toLowerCase().trim();
-  const hideGeo = $("hideGeo").checked;
+  const okOnly = $("okOnly").checked;
   const all = current === "mine" ? mine : (cache[current] || []);
+  const focusedUrl = document.activeElement?.dataset?.url;
   visible = all.filter(c =>
     (!q || c.name.toLowerCase().includes(q) || (c.group || "").toLowerCase().includes(q)) &&
-    (!hideGeo || !/geo-blocked/i.test(c.name)));
-  $("status").textContent = `${visible.length} channel` +
+    (!okOnly || known(c) === true));
+  const done = all.filter(c => known(c) !== null).length;
+  $("status").textContent = (checking
+      ? `Memeriksa channel… ${done} / ${all.length} dicek · ${visible.length} bisa diputar`
+      : `${visible.length} channel` + (okOnly && all.length ? ` bisa diputar (dari ${all.length})` : "")) +
     (current === "mine" ? "" : " · klik kanan (atau tombol Menu di remote) untuk ★ menyimpan ke Daftarku");
+  // Isi grid sama seperti sebelumnya → cukup perbarui teks status, tanpa menggambar ulang (tidak berkedip).
+  const sig = current + "|" + visible.length + "|" + mine.length + "|" + visible.map(c => c.url).join("|");
+  if (sig === lastSig) return;
+  lastSig = sig;
   const grid = $("grid"); grid.innerHTML = "";
   if (!visible.length) {
-    grid.innerHTML = `<div class="empty">${current === "mine"
+    grid.innerHTML = `<div class="empty">${current === "mine" && !mine.length
       ? "Daftarku masih kosong. Buka tab lain lalu simpan channel favoritmu."
-      : "Tidak ada channel yang cocok."}</div>`;
+      : checking ? "Sedang mencari channel yang bisa diputar…"
+      : q ? "Tidak ada channel yang cocok."
+      : "Saat ini tidak ada channel yang bisa diputar di sini. Coba tab lain."}</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
   visible.forEach((ch, i) => {
     const el = document.createElement("button");
-    el.className = "ch";
+    el.className = "ch"; el.dataset.url = ch.url;
     const cleanName = ch.name.replace(/\s*\[.*?\]/g, "");
     const quality = (ch.name.match(/\((\d+[pi])\)/) || [])[1] || "";
     el.innerHTML =
@@ -224,6 +304,11 @@ function render() {
     frag.appendChild(el);
   });
   grid.appendChild(frag);
+  // Kembalikan sorotan remote ke kartu yang tadi dipilih (daftar diperbarui selagi pemeriksaan jalan).
+  const cards = [...grid.querySelectorAll(".ch")];
+  const back = cards.find(c => c.dataset.url === focusedUrl);
+  if (back) back.focus({ preventScroll: true });
+  else if (document.activeElement === document.body) cards[0]?.focus({ preventScroll: true });
 }
 
 // ---------- Pemutar ----------
@@ -247,6 +332,7 @@ function play(i, auto = false) {
       $("osdNum").textContent = `${playingIndex + 1} / ${visible.length}` + (h ? ` · ${h}p` : "");
     });
     hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) showErr(ch); });
+    hls.on(Hls.Events.FRAG_BUFFERED, () => { if (known(ch) !== true) mark(ch, true); });
     hls.loadSource(ch.url); hls.attachMedia(video);
     video.onerror = null;
   } else {
@@ -258,6 +344,7 @@ function play(i, auto = false) {
 }
 function showErr(ch) {
   if (ch !== visible[playingIndex] || $("err").classList.contains("show")) return;
+  mark(ch, false);
   const httpOnHttps = location.protocol === "https:" && ch.url.startsWith("http:");
   $("err").innerHTML = `<div>⚠ Channel ini tidak bisa diputar di browser.<br><small>${
     httpOnHttps ? "Alamatnya memakai http (tidak aman) sehingga diblokir browser."
@@ -433,7 +520,7 @@ $("fileImport").onchange = async e => {
   current = "mine"; renderTabs(); render(); e.target.value = "";
 };
 $("q").oninput = render;
-$("hideGeo").onchange = render;
+$("okOnly").onchange = render;
 
 renderTabs(); load().then(() => document.querySelector(".ch")?.focus());
 </script>
